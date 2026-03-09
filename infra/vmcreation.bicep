@@ -1,0 +1,79 @@
+name: eShopOnWeb Build and Test
+
+on: [push, workflow_dispatch]
+
+env:
+  RESOURCE-GROUP: az2006-rg
+  LOCATION: eastus
+  TEMPLATE-FILE: infra/VMCreation.bicep
+  SUBSCRIPTION-ID: 02624755-b5c1-4c0c-8852-358ec24c439d
+  VM-NAME: az2006app59792586
+  ADMIN-USERNAME: azureuser
+
+jobs:
+  buildandtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+          dotnet-quality: "preview"
+
+      - name: Build with dotnet
+        run: dotnet build ./eShopOnWeb.sln --configuration Release
+
+      - name: Test with dotnet
+        run: dotnet test ./eShopOnWeb.sln --configuration Release
+
+      - name: dotnet publish
+        run: |
+          dotnet publish ./src/Web/Web.csproj -c Release -o ${{env.DOTNET_ROOT}}/myapp
+          cd ${{env.DOTNET_ROOT}}/myapp
+          zip -r ../app.zip .
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v5
+        with:
+          name: .net-app
+          path: ${{env.DOTNET_ROOT}}/app.zip
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v5
+        with:
+          name: bicep-template
+          path: ${{ env.TEMPLATE-FILE }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: buildandtest
+    environment:
+      name: "Development"
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v6
+        with:
+          name: .net-app
+          path: .net-app
+
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v6
+        with:
+          name: bicep-template
+          path: bicep-template
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with: 
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy VM using Bicep
+        uses: azure/arm-deploy@v2
+        with:
+          subscriptionId: ${{ env.SUBSCRIPTION-ID }}
+          resourceGroupName: ${{ env.RESOURCE-GROUP }}
+          template: bicep-template/vmcreation.bicep
+          parameters: "vmName=${{ env.VM-NAME }} location=${{ env.LOCATION }} adminUsername=${{ env.ADMIN-USERNAME }} adminPassword=${{ secrets.VM_ADMIN_PASSWORD }}"
+          failOnStdErr: false
